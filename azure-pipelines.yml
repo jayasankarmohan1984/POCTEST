@@ -46,18 +46,21 @@ stages:
 
 - stage: Apply
   jobs:
-  - job: apply
+  - deployment: apply
     displayName: 'Terraform Apply'
+    environment: 'hub-default'
     pool:
       vmImage: 'ubuntu-latest'
-    environment: 'hub-default'
-    steps:
-    - task: TerraformCLI@0
-      inputs:
-        command: 'apply'
-        workingDirectory: '$(TF_WORKING_DIR)'
-        environmentServiceNameAzureRM: 'SCN-TFM-HUB'
-        commandOptions: '-auto-approve'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: TerraformCLI@0
+            inputs:
+              command: 'apply'
+              workingDirectory: '$(TF_WORKING_DIR)'
+              environmentServiceNameAzureRM: 'SCN-TFM-HUB'
+              commandOptions: '-auto-approve'
 
 - stage: Drift
   jobs:
