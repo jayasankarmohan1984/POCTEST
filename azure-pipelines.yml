@@ -27,6 +27,8 @@ stages:
         backendAzureRmStorageAccountName: 'tfstateaccountpoc'
         backendAzureRmContainerName: 'tfstate'
         backendAzureRmKey: 'terraform.tfstate'
+        useAzureRmAuth: true
+        commandOptions: '-upgrade'
 
     - task: TerraformTaskV1@0
       inputs:
