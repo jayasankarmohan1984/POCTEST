@@ -1,31 +1,265 @@
+# ============================================================
+# azure-pipelines.yml
+# Hub Subscription: aab79a42-5d6c-4418-b87c-4e3232fde1b1
+# Features: workspace-aware state key, saved plan file,
+#           drift detection (scheduled), PR validation gate
+# ============================================================
+
 trigger:
-  - main
+  branches:
+    include:
+      - main
+  paths:
+    exclude:
+      - "*.md"
+      - ".gitignore"
+
+# ── Drift detection: run plan daily against live infra ──────
+schedules:
+  - cron: "0 6 * * *"
+    displayName: "Daily drift detection"
+    branches:
+      include:
+        - main
+    always: true
+
+pr:
+  branches:
+    include:
+      - main
+
+# ── Pipeline-level variables ─────────────────────────────────
+variables:
+  # Terraform workspace maps to environment; change per pipeline env.
+  TF_WORKSPACE: "default"           # options: default | dev | staging | prod
+  TF_VERSION:   "1.9.8"             # FIX: bumped from 1.5.7 (EOL) to latest 1.9.x
+  WORKING_DIR:  "$(System.DefaultWorkingDirectory)"
+  BACKEND_KEY:  "hub/$(TF_WORKSPACE)/terraform.tfstate"
 
 pool:
-  vmImage: 'ubuntu-latest'
+  vmImage: "ubuntu-latest"
 
-steps:
-  - task: TerraformInstaller@0
-    inputs:
-      terraformVersion: '1.5.7'
+stages:
 
-  - task: TerraformCLI@0
-    inputs:
-      command: 'init'
-      workingDirectory: '$(System.DefaultWorkingDirectory)'
-      backendType: 'azurerm'
-      backendServiceArm: 'SCN-TFM-HUB'
-      ensureBackend: true
+  # ──────────────────────────────────────────────────────────
+  # STAGE 1: Validate & Format check
+  # ──────────────────────────────────────────────────────────
+  - stage: Validate
+    displayName: "Terraform Validate & Fmt"
+    jobs:
+      - job: validate
+        displayName: "Validate"
+        steps:
+          - task: TerraformInstaller@1
+            displayName: "Install Terraform $(TF_VERSION)"
+            inputs:
+              terraformVersion: "$(TF_VERSION)"
 
-  - task: TerraformCLI@0
-    inputs:
-      command: 'plan'
-      workingDirectory: '$(System.DefaultWorkingDirectory)'
-      environmentServiceName: 'SCN-TFM-HUB'
+          - task: TerraformCLI@1
+            displayName: "terraform init"
+            inputs:
+              command:          "init"
+              workingDirectory: "$(WORKING_DIR)"
+              backendType:      "azurerm"
+              backendServiceArm: "SCN-TFM-HUB"
+              ensureBackend:    true
+              commandOptions:   >-
+                -backend-config="resource_group_name=RG-MGMT"
+                -backend-config="storage_account_name=hscstorageacct01"
+                -backend-config="container_name=tfstate"
+                -backend-config="key=$(BACKEND_KEY)"
 
-  - task: TerraformCLI@0
-    inputs:
-      command: 'apply'
-      workingDirectory: '$(System.DefaultWorkingDirectory)'
-      environmentServiceName: 'SCN-TFM-HUB'
-      args: '-auto-approve'
+          # Workspace: create if not exists, then select
+          - script: |
+              terraform workspace new $(TF_WORKSPACE) 2>/dev/null || true
+              terraform workspace select $(TF_WORKSPACE)
+              echo "Active workspace: $(terraform workspace show)"
+            displayName: "Select workspace: $(TF_WORKSPACE)"
+            workingDirectory: "$(WORKING_DIR)"
+
+          - script: |
+              terraform fmt -check -recursive
+            displayName: "terraform fmt check"
+            workingDirectory: "$(WORKING_DIR)"
+
+          - task: TerraformCLI@1
+            displayName: "terraform validate"
+            inputs:
+              command:          "validate"
+              workingDirectory: "$(WORKING_DIR)"
+
+  # ──────────────────────────────────────────────────────────
+  # STAGE 2: Plan (saves plan file as artifact)
+  # ──────────────────────────────────────────────────────────
+  - stage: Plan
+    displayName: "Terraform Plan"
+    dependsOn: Validate
+    jobs:
+      - job: plan
+        displayName: "Plan"
+        steps:
+          - task: TerraformInstaller@1
+            inputs:
+              terraformVersion: "$(TF_VERSION)"
+
+          - task: TerraformCLI@1
+            displayName: "terraform init"
+            inputs:
+              command:          "init"
+              workingDirectory: "$(WORKING_DIR)"
+              backendType:      "azurerm"
+              backendServiceArm: "SCN-TFM-HUB"
+              ensureBackend:    true
+              commandOptions:   >-
+                -backend-config="resource_group_name=RG-MGMT"
+                -backend-config="storage_account_name=hscstorageacct01"
+                -backend-config="container_name=tfstate"
+                -backend-config="key=$(BACKEND_KEY)"
+
+          - script: |
+              terraform workspace new $(TF_WORKSPACE) 2>/dev/null || true
+              terraform workspace select $(TF_WORKSPACE)
+            displayName: "Select workspace"
+            workingDirectory: "$(WORKING_DIR)"
+
+          - task: TerraformCLI@1
+            displayName: "terraform plan"
+            inputs:
+              command:                  "plan"
+              workingDirectory:         "$(WORKING_DIR)"
+              environmentServiceName:   "SCN-TFM-HUB"
+              # FIX: Save plan to file so apply uses the exact same plan.
+              commandOptions:           "-out=$(WORKING_DIR)/tfplan -detailed-exitcode"
+            env:
+              TF_VAR_subscription_id: "aab79a42-5d6c-4418-b87c-4e3232fde1b1"
+
+          # Publish plan artifact so Apply stage uses the same binary plan
+          - task: PublishPipelineArtifact@1
+            displayName: "Publish plan artifact"
+            inputs:
+              targetPath: "$(WORKING_DIR)/tfplan"
+              artifact:   "tfplan-$(TF_WORKSPACE)"
+
+  # ──────────────────────────────────────────────────────────
+  # STAGE 3: Apply (main branch only, not on PR, not on schedule)
+  # ──────────────────────────────────────────────────────────
+  - stage: Apply
+    displayName: "Terraform Apply"
+    dependsOn: Plan
+    # Only apply on direct pushes to main; skip on PRs and scheduled drift runs.
+    condition: >
+      and(
+        succeeded(),
+        eq(variables['Build.SourceBranch'], 'refs/heads/main'),
+        ne(variables['Build.Reason'], 'PullRequest'),
+        ne(variables['Build.Reason'], 'Schedule')
+      )
+    jobs:
+      - deployment: apply
+        displayName: "Apply"
+        environment: "hub-$(TF_WORKSPACE)"  # ADO Environment for approval gates
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: TerraformInstaller@1
+                  inputs:
+                    terraformVersion: "$(TF_VERSION)"
+
+                - task: TerraformCLI@1
+                  displayName: "terraform init"
+                  inputs:
+                    command:          "init"
+                    workingDirectory: "$(WORKING_DIR)"
+                    backendType:      "azurerm"
+                    backendServiceArm: "SCN-TFM-HUB"
+                    ensureBackend:    true
+                    commandOptions:   >-
+                      -backend-config="resource_group_name=RG-MGMT"
+                      -backend-config="storage_account_name=hscstorageacct01"
+                      -backend-config="container_name=tfstate"
+                      -backend-config="key=$(BACKEND_KEY)"
+
+                - script: |
+                    terraform workspace new $(TF_WORKSPACE) 2>/dev/null || true
+                    terraform workspace select $(TF_WORKSPACE)
+                  displayName: "Select workspace"
+                  workingDirectory: "$(WORKING_DIR)"
+
+                - task: DownloadPipelineArtifact@2
+                  displayName: "Download plan artifact"
+                  inputs:
+                    artifact:     "tfplan-$(TF_WORKSPACE)"
+                    targetPath:   "$(WORKING_DIR)"
+
+                - task: TerraformCLI@1
+                  displayName: "terraform apply (saved plan)"
+                  inputs:
+                    command:                "apply"
+                    workingDirectory:       "$(WORKING_DIR)"
+                    environmentServiceName: "SCN-TFM-HUB"
+                    # FIX: Apply the saved plan — no -auto-approve on a fresh plan;
+                    # deterministic and safe.
+                    commandOptions:         "$(WORKING_DIR)/tfplan"
+
+  # ──────────────────────────────────────────────────────────
+  # STAGE 4: Drift Detection (scheduled runs only)
+  # ──────────────────────────────────────────────────────────
+  - stage: DriftDetect
+    displayName: "Drift Detection"
+    dependsOn: []           # Independent — runs in parallel with Validate on schedules
+    condition: eq(variables['Build.Reason'], 'Schedule')
+    jobs:
+      - job: drift
+        displayName: "Detect infrastructure drift"
+        steps:
+          - task: TerraformInstaller@1
+            inputs:
+              terraformVersion: "$(TF_VERSION)"
+
+          - task: TerraformCLI@1
+            displayName: "terraform init"
+            inputs:
+              command:          "init"
+              workingDirectory: "$(WORKING_DIR)"
+              backendType:      "azurerm"
+              backendServiceArm: "SCN-TFM-HUB"
+              ensureBackend:    true
+              commandOptions:   >-
+                -backend-config="resource_group_name=RG-MGMT"
+                -backend-config="storage_account_name=hscstorageacct01"
+                -backend-config="container_name=tfstate"
+                -backend-config="key=$(BACKEND_KEY)"
+
+          - script: |
+              terraform workspace new $(TF_WORKSPACE) 2>/dev/null || true
+              terraform workspace select $(TF_WORKSPACE)
+            displayName: "Select workspace"
+            workingDirectory: "$(WORKING_DIR)"
+
+          - script: |
+              set +e
+              terraform plan -detailed-exitcode -refresh=true \
+                -out=/dev/null 2>&1 | tee drift_report.txt
+              EXIT_CODE=${PIPESTATUS[0]}
+              # Exit codes: 0=no changes, 1=error, 2=changes detected
+              if [ "$EXIT_CODE" -eq 2 ]; then
+                echo "##vso[task.logissue type=warning]DRIFT DETECTED — infrastructure differs from Terraform state."
+                echo "##vso[task.complete result=SucceededWithIssues;]Drift detected."
+              elif [ "$EXIT_CODE" -eq 1 ]; then
+                echo "##vso[task.logissue type=error]terraform plan failed during drift check."
+                exit 1
+              else
+                echo "No drift detected."
+              fi
+            displayName: "Run drift plan"
+            workingDirectory: "$(WORKING_DIR)"
+            env:
+              TF_VAR_subscription_id: "aab79a42-5d6c-4418-b87c-4e3232fde1b1"
+
+          - task: PublishPipelineArtifact@1
+            displayName: "Publish drift report"
+            condition: always()
+            inputs:
+              targetPath: "$(WORKING_DIR)/drift_report.txt"
+              artifact:   "drift-report-$(Build.BuildId)"

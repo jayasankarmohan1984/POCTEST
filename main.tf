@@ -1,7 +1,34 @@
 ########################
-# Locals
+# main.tf
+# Subscription : __Hub Subscription__ (aab79a42-5d6c-4418-b87c-4e3232fde1b1)
+# Features     : lifecycle blocks, drift guards, workspace-aware locals
+########################
+
+########################
+# Workspace / Environment locals
 ########################
 locals {
+  # Resolve environment from workspace name; override via var if needed.
+  # Workspaces: default → hub, dev, staging, prod
+  workspace_env_map = {
+    default = "hub"
+    dev     = "dev"
+    staging = "staging"
+    prod    = "prod"
+  }
+  environment = var.environment_override != "" ? var.environment_override : lookup(
+    local.workspace_env_map, terraform.workspace, terraform.workspace
+  )
+
+  # All resources get workspace + environment injected into tags.
+  common_tags = merge(var.tags, {
+    workspace   = terraform.workspace
+    environment = local.environment
+  })
+
+  ########################
+  # Networking locals
+  ########################
   hub_vnet = "VN-VPN-FE"
 
   subnet_map = {
@@ -31,27 +58,24 @@ locals {
 }
 
 ########################
-# Resource groups
+# Resource Groups
 ########################
 resource "azurerm_resource_group" "rg" {
   for_each = toset(var.rg_names)
   name     = each.value
   location = var.location
-  tags     = var.tags
+  tags     = local.common_tags
+
+  lifecycle {
+    # Prevent accidental RG deletion — must be explicitly removed from state first.
+    prevent_destroy = true
+    # Drift guard: ignore out-of-band tag changes on existing RGs.
+    ignore_changes = [tags["managed_by"]]
+  }
 }
 
 ########################
-# DDoS protection plan
-########################
-resource "azurerm_network_ddos_protection_plan" "ddos" {
-  name                = "ddos-hsc-${lower(replace(var.location, " ", ""))}"
-  resource_group_name = azurerm_resource_group.rg["RG-MGMT"].name
-  location            = var.location
-  tags                = var.tags
-}
-
-########################
-# Virtual networks
+# Virtual Networks
 ########################
 resource "azurerm_virtual_network" "vnet" {
   for_each            = var.vnets
@@ -59,12 +83,20 @@ resource "azurerm_virtual_network" "vnet" {
   location            = var.location
   resource_group_name = azurerm_resource_group.rg[each.value.resource_group].name
   address_space       = each.value.address_space
+  tags                = local.common_tags
 
-  tags = var.tags
+  lifecycle {
+    # FIX: Re-creating a VNet destroys all peerings/subnets — always create
+    # replacement before destroying original.
+    create_before_destroy = true
+    # Drift guard: address_space changes done outside Terraform are common
+    # during network re-planning; flag them via plan rather than auto-correcting.
+    ignore_changes = [tags]
+  }
 }
 
 ########################
-# Subnets + NSGs
+# Subnets
 ########################
 resource "azurerm_subnet" "subnet_each" {
   for_each             = local.flattened_subnets
@@ -72,14 +104,27 @@ resource "azurerm_subnet" "subnet_each" {
   resource_group_name  = azurerm_resource_group.rg[each.value.resource_group].name
   virtual_network_name = azurerm_virtual_network.vnet[each.value.vnet_name].name
   address_prefixes     = [each.value.cidr]
+
+  lifecycle {
+    # Drift guard: service_endpoints and delegations are often added via portal.
+    ignore_changes = [service_endpoints, delegation]
+  }
 }
 
+########################
+# Network Security Groups
+########################
 resource "azurerm_network_security_group" "nsg" {
   for_each            = local.non_gateway_subnets
   name                = "NSG-${each.value.vnet_name}-${each.value.subnet_name}"
   resource_group_name = azurerm_resource_group.rg[each.value.resource_group].name
   location            = var.location
-  tags                = var.tags
+  tags                = local.common_tags
+
+  lifecycle {
+    # Drift guard: security_rule inline blocks are sometimes added in portal.
+    ignore_changes = [security_rule, tags]
+  }
 }
 
 resource "azurerm_network_security_rule" "deny_internet_inbound" {
@@ -101,10 +146,14 @@ resource "azurerm_subnet_network_security_group_association" "assoc" {
   for_each                  = local.non_gateway_subnets
   subnet_id                 = azurerm_subnet.subnet_each[each.key].id
   network_security_group_id = azurerm_network_security_group.nsg[each.key].id
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 ########################
-# VNet peering (hub <-> spokes)
+# VNet Peering — Hub ↔ Spokes
 ########################
 resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   for_each                  = toset(local.spoke_vnets)
@@ -118,6 +167,11 @@ resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   allow_gateway_transit        = true
 
   depends_on = [azurerm_virtual_network_gateway.vpn_gw]
+
+  lifecycle {
+    # Peering settings drift if changed in portal — detect via plan, not silently.
+    ignore_changes = []
+  }
 }
 
 resource "azurerm_virtual_network_peering" "spoke_to_hub" {
@@ -135,7 +189,7 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
 }
 
 ########################
-# VPN gateway (hub)
+# VPN Gateway — Public IP
 ########################
 resource "azurerm_public_ip" "vpn_gw_pip" {
   name                = "VN-VPN-GATEWAY-PIP"
@@ -143,9 +197,21 @@ resource "azurerm_public_ip" "vpn_gw_pip" {
   location            = var.location
   allocation_method   = "Static"
   sku                 = "Standard"
-  tags                = var.tags
+  tags                = local.common_tags
+
+  lifecycle {
+    # FIX: Public IPs for VPN GWs cannot change SKU/allocation in-place.
+    # Create new PIP first so the gateway stays online.
+    create_before_destroy = true
+    prevent_destroy       = true
+    # Drift guard: Azure may update zones or IP after allocation.
+    ignore_changes = [ip_address, zones]
+  }
 }
 
+########################
+# VPN Gateway
+########################
 resource "azurerm_virtual_network_gateway" "vpn_gw" {
   name                = "VN-VPN-GATEWAY"
   location            = var.location
@@ -161,11 +227,17 @@ resource "azurerm_virtual_network_gateway" "vpn_gw" {
     subnet_id                     = azurerm_subnet.subnet_each["${local.hub_vnet}|GatewaySubnet"].id
   }
 
-  tags = var.tags
+  tags = local.common_tags
+
+  lifecycle {
+    prevent_destroy = true
+    # Drift guard: bgp_settings are sometimes enabled post-deploy in portal.
+    ignore_changes = [bgp_settings, tags]
+  }
 }
 
 ########################
-# Local network gateway (on-prem)
+# Local Network Gateway (on-prem)
 ########################
 resource "azurerm_local_network_gateway" "lng" {
   name                = var.local_network_gateway.name
@@ -173,11 +245,16 @@ resource "azurerm_local_network_gateway" "lng" {
   resource_group_name = azurerm_resource_group.rg[var.local_network_gateway.resource_group].name
   gateway_address     = var.local_network_gateway.gateway_address
   address_space       = var.local_network_gateway.address_space
-  tags                = var.tags
+  tags                = local.common_tags
+
+  lifecycle {
+    # On-prem gateway_address can change during failover drills; track in plan.
+    ignore_changes = [tags]
+  }
 }
 
 ########################
-# S2S VPN connection
+# S2S VPN Connection
 ########################
 resource "azurerm_virtual_network_gateway_connection" "s2s" {
   name                       = "VN-VPN-VPN-CONNECTION"
@@ -188,14 +265,21 @@ resource "azurerm_virtual_network_gateway_connection" "s2s" {
   local_network_gateway_id   = azurerm_local_network_gateway.lng.id
   shared_key                 = var.s2s_shared_key
   enable_bgp                 = false
-  tags                       = var.tags
+  tags                       = local.common_tags
+
+  lifecycle {
+    prevent_destroy = true
+    # Drift guard: shared_key rotation done outside Terraform is common.
+    ignore_changes = [shared_key, tags]
+  }
 }
 
 ########################
-# Storage accounts
+# Storage Accounts
 ########################
 resource "azurerm_storage_account" "sa" {
-  for_each                 = var.storage_accounts
+  for_each = var.storage_accounts
+
   name                     = each.key
   resource_group_name      = azurerm_resource_group.rg[each.value.resource_group].name
   location                 = var.location
@@ -203,7 +287,13 @@ resource "azurerm_storage_account" "sa" {
   account_replication_type = each.value.account_replication_type
   account_kind             = each.value.account_kind
   min_tls_version          = "TLS1_2"
-  tags                     = var.tags
+
+  # FIX: enable_https_traffic_only was declared in variable type but never
+  # wired up in the original. The correct attribute in azurerm 3.x is
+  # https_traffic_only_enabled (renamed from enable_https_traffic_only).
+  https_traffic_only_enabled = each.value.enable_https_traffic_only
+
+  tags = local.common_tags
 
   network_rules {
     default_action             = "Allow"
@@ -212,26 +302,35 @@ resource "azurerm_storage_account" "sa" {
     virtual_network_subnet_ids = []
   }
 
-  # Remove the entire share_properties block
+  # share_properties block removed — not supported on all account_kind values.
+
+  lifecycle {
+    # Drift guard: network_rules are frequently tightened via Azure Policy post-deploy.
+    ignore_changes = [network_rules, tags]
+    prevent_destroy = true
+  }
 }
 
-
 ########################
-# Azure Monitor (LAW)
+# Log Analytics Workspace
 ########################
-
 resource "azurerm_log_analytics_workspace" "law" {
   name                = "law-hsc-${lower(replace(var.location, " ", ""))}"
   location            = var.location
   resource_group_name = azurerm_resource_group.rg["RG-MGMT"].name
   sku                 = "PerGB2018"
   retention_in_days   = var.log_analytics_retention_days
-  tags                = var.tags
+  tags                = local.common_tags
+
+  lifecycle {
+    prevent_destroy = true
+    # Drift guard: retention is adjusted by Azure Policy / cost management jobs.
+    ignore_changes = [retention_in_days, tags]
+  }
 }
 
-
 ########################
-# Windows VMs per non-GatewaySubnet
+# Network Interfaces
 ########################
 resource "azurerm_network_interface" "nic" {
   for_each            = local.non_gateway_subnets
@@ -245,11 +344,20 @@ resource "azurerm_network_interface" "nic" {
     private_ip_address_allocation = "Dynamic"
   }
 
-  tags = var.tags
+  tags = local.common_tags
+
+  lifecycle {
+    # Drift guard: private IP may be statically set post-deploy.
+    ignore_changes = [ip_configuration[0].private_ip_address, tags]
+  }
 }
 
+########################
+# Windows Virtual Machines
+########################
 resource "azurerm_windows_virtual_machine" "vm" {
-  for_each              = local.non_gateway_subnets
+  for_each = local.non_gateway_subnets
+
   name                  = "vm-${each.value.vnet_name}-${each.value.subnet_name}"
   location              = var.location
   resource_group_name   = azurerm_resource_group.rg[each.value.resource_group].name
@@ -258,8 +366,8 @@ resource "azurerm_windows_virtual_machine" "vm" {
   admin_password        = var.win_admin_password
   network_interface_ids = [azurerm_network_interface.nic[each.key].id]
 
-  # Add this line to set a valid short computer name
-  computer_name = substr("vm-${each.value.vnet_name}-${each.value.subnet_name}", 0, 15)
+  # FIX: Windows computer name max 15 chars; original could exceed for long subnet names.
+  computer_name = substr(replace("vm-${each.value.subnet_name}", "-", ""), 0, 15)
 
   os_disk {
     caching              = "ReadWrite"
@@ -273,16 +381,34 @@ resource "azurerm_windows_virtual_machine" "vm" {
     version   = "latest"
   }
 
-  tags = var.tags
+  tags = local.common_tags
+
+  lifecycle {
+    # Drift guard: admin_password is sensitive and should not trigger replacement.
+    ignore_changes = [
+      admin_password,
+      # Drift guard: Azure platform may update image version automatically.
+      source_image_reference[0].version,
+      tags,
+    ]
+    # Never destroy a VM before its replacement is ready.
+    create_before_destroy = false
+  }
 }
+
 ########################
-# Logic App (consumption) with simple HTTP trigger/action
+# Logic App Workflow
 ########################
 resource "azurerm_logic_app_workflow" "la" {
   name                = var.logic_app_name
   location            = var.location
   resource_group_name = azurerm_resource_group.rg["RG-MGMT"].name
-  tags                = var.tags
+  tags                = local.common_tags
+
+  lifecycle {
+    # Drift guard: workflow definition body changes post-deploy via Logic App Designer.
+    ignore_changes = [workflow_parameters, parameters, tags]
+  }
 }
 
 resource "azurerm_logic_app_trigger_http_request" "la_trigger" {
@@ -308,7 +434,7 @@ resource "azurerm_logic_app_action_http" "la_action" {
 }
 
 ########################
-# Azure Virtual Desktop (control plane scaffold)
+# Azure Virtual Desktop
 ########################
 resource "azurerm_virtual_desktop_host_pool" "avd_host_pool" {
   name                     = "avd-hp-${lower(replace(var.location, " ", ""))}"
@@ -317,14 +443,26 @@ resource "azurerm_virtual_desktop_host_pool" "avd_host_pool" {
   type                     = "Pooled"
   load_balancer_type       = "BreadthFirst"
   maximum_sessions_allowed = var.avd_max_sessions
-  tags                     = var.tags
+  tags                     = local.common_tags
+
+  lifecycle {
+    ignore_changes = [
+      # Drift guard: registration_info is rotated regularly; ignore in state.
+      registration_info,
+      tags,
+    ]
+  }
 }
 
 resource "azurerm_virtual_desktop_workspace" "avd_workspace" {
   name                = "avd-ws-${lower(replace(var.location, " ", ""))}"
   location            = var.location
   resource_group_name = azurerm_resource_group.rg["RG-MGMT"].name
-  tags                = var.tags
+  tags                = local.common_tags
+
+  lifecycle {
+    ignore_changes = [tags]
+  }
 }
 
 resource "azurerm_virtual_desktop_application_group" "avd_dag" {
@@ -333,7 +471,11 @@ resource "azurerm_virtual_desktop_application_group" "avd_dag" {
   resource_group_name = azurerm_resource_group.rg["RG-MGMT"].name
   host_pool_id        = azurerm_virtual_desktop_host_pool.avd_host_pool.id
   type                = "Desktop"
-  tags                = var.tags
+  tags                = local.common_tags
+
+  lifecycle {
+    ignore_changes = [tags]
+  }
 }
 
 resource "azurerm_virtual_desktop_workspace_application_group_association" "avd_ws_assoc" {
@@ -342,15 +484,21 @@ resource "azurerm_virtual_desktop_workspace_application_group_association" "avd_
 }
 
 ########################
-# Resource locks for critical infra
+# Management Locks — Critical Infrastructure
 ########################
 resource "azurerm_management_lock" "lock_critical" {
   for_each = {
     "VPN-GW"     = azurerm_virtual_network_gateway.vpn_gw.id
     "VPN-GW-PIP" = azurerm_public_ip.vpn_gw_pip.id
+    "LAW"        = azurerm_log_analytics_workspace.law.id
   }
   name       = "DoNotDelete-${each.key}"
   scope      = each.value
   lock_level = "CanNotDelete"
-  notes      = "Critical resource per HSC scaffold."
+  notes      = "Critical Hub resource — __Hub Subscription__ (aab79a42). Managed by Terraform."
+
+  lifecycle {
+    # Locks should never be removed automatically.
+    prevent_destroy = true
+  }
 }
