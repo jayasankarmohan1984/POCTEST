@@ -23,6 +23,10 @@ stages:
         command: 'init'
         workingDirectory: '$(TF_WORKING_DIR)'
         backendServiceArm: 'SCN-TFM-HUB'
+        backendAzureRmResourceGroupName: 'rg-tfstate'
+        backendAzureRmStorageAccountName: 'tfstateaccountpoc'
+        backendAzureRmContainerName: 'tfstate'
+        backendAzureRmKey: 'terraform.tfstate'
 
     - task: TerraformTaskV1@0
       inputs:
