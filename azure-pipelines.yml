@@ -1,0 +1,31 @@
+trigger:
+  - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+  - task: TerraformInstaller@0
+    inputs:
+      terraformVersion: '1.5.7'
+
+  - task: TerraformCLI@0
+    inputs:
+      command: 'init'
+      workingDirectory: '$(System.DefaultWorkingDirectory)'
+      backendType: 'azurerm'
+      backendServiceArm: 'SCN-TFM-HUB'
+      ensureBackend: true
+
+  - task: TerraformCLI@0
+    inputs:
+      command: 'plan'
+      workingDirectory: '$(System.DefaultWorkingDirectory)'
+      environmentServiceName: 'SCN-TFM-HUB'
+
+  - task: TerraformCLI@0
+    inputs:
+      command: 'apply'
+      workingDirectory: '$(System.DefaultWorkingDirectory)'
+      environmentServiceName: 'SCN-TFM-HUB'
+      args: '-auto-approve'
