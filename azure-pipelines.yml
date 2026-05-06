@@ -12,22 +12,21 @@ stages:
   jobs:
   - job: validate
     displayName: 'Terraform Validate'
-    pool:
-      vmImage: 'ubuntu-latest'
     steps:
     - task: TerraformInstaller@0
       inputs:
         terraformVersion: 'latest'
 
-    - task: TerraformCLI@0
+    - task: TerraformTaskV1@0
       inputs:
+        provider: 'azurerm'
         command: 'init'
         workingDirectory: '$(TF_WORKING_DIR)'
-        backendType: 'azurerm'
         backendServiceArm: 'SCN-TFM-HUB'
 
-    - task: TerraformCLI@0
+    - task: TerraformTaskV1@0
       inputs:
+        provider: 'azurerm'
         command: 'validate'
         workingDirectory: '$(TF_WORKING_DIR)'
 
@@ -35,11 +34,10 @@ stages:
   jobs:
   - job: plan
     displayName: 'Terraform Plan'
-    pool:
-      vmImage: 'ubuntu-latest'
     steps:
-    - task: TerraformCLI@0
+    - task: TerraformTaskV1@0
       inputs:
+        provider: 'azurerm'
         command: 'plan'
         workingDirectory: '$(TF_WORKING_DIR)'
         environmentServiceNameAzureRM: 'SCN-TFM-HUB'
@@ -49,14 +47,13 @@ stages:
   - deployment: apply
     displayName: 'Terraform Apply'
     environment: 'hub-default'
-    pool:
-      vmImage: 'ubuntu-latest'
     strategy:
       runOnce:
         deploy:
           steps:
-          - task: TerraformCLI@0
+          - task: TerraformTaskV1@0
             inputs:
+              provider: 'azurerm'
               command: 'apply'
               workingDirectory: '$(TF_WORKING_DIR)'
               environmentServiceNameAzureRM: 'SCN-TFM-HUB'
@@ -66,11 +63,10 @@ stages:
   jobs:
   - job: drift
     displayName: 'Terraform Drift Detection'
-    pool:
-      vmImage: 'ubuntu-latest'
     steps:
-    - task: TerraformCLI@0
+    - task: TerraformTaskV1@0
       inputs:
+        provider: 'azurerm'
         command: 'plan'
         workingDirectory: '$(TF_WORKING_DIR)'
         environmentServiceNameAzureRM: 'SCN-TFM-HUB'
