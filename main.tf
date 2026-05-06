@@ -70,7 +70,7 @@ resource "azurerm_resource_group" "rg" {
     # Prevent accidental RG deletion — must be explicitly removed from state first.
     prevent_destroy = true
     # Drift guard: ignore out-of-band tag changes on existing RGs.
-    ignore_changes = [tags["managed_by"]]
+    ignore_changes = [tags] # FIX: map-key indexing in ignore_changes is invalid HCL — must target full attribute
   }
 }
 
@@ -168,10 +168,7 @@ resource "azurerm_virtual_network_peering" "hub_to_spoke" {
 
   depends_on = [azurerm_virtual_network_gateway.vpn_gw]
 
-  lifecycle {
-    # Peering settings drift if changed in portal — detect via plan, not silently.
-    ignore_changes = []
-  }
+  # No lifecycle block needed — all peering attributes should be tracked.
 }
 
 resource "azurerm_virtual_network_peering" "spoke_to_hub" {
@@ -200,10 +197,12 @@ resource "azurerm_public_ip" "vpn_gw_pip" {
   tags                = local.common_tags
 
   lifecycle {
-    # FIX: Public IPs for VPN GWs cannot change SKU/allocation in-place.
-    # Create new PIP first so the gateway stays online.
-    create_before_destroy = true
-    prevent_destroy       = true
+    # FIX BUG 4: create_before_destroy=true + prevent_destroy=true together
+    # causes a deadlock — Terraform creates the replacement PIP but then cannot
+    # destroy the original (blocked by prevent_destroy), leaving both orphaned.
+    # Resolution: keep prevent_destroy only. PIP SKU/allocation cannot change
+    # in-place anyway; if it must change, remove prevent_destroy temporarily.
+    prevent_destroy = true
     # Drift guard: Azure may update zones or IP after allocation.
     ignore_changes = [ip_address, zones]
   }
@@ -348,7 +347,7 @@ resource "azurerm_network_interface" "nic" {
 
   lifecycle {
     # Drift guard: private IP may be statically set post-deploy.
-    ignore_changes = [ip_configuration[0].private_ip_address, tags]
+    ignore_changes = [ip_configuration, tags] # FIX: indexed block paths not valid in ignore_changes
   }
 }
 
@@ -385,10 +384,11 @@ resource "azurerm_windows_virtual_machine" "vm" {
 
   lifecycle {
     # Drift guard: admin_password is sensitive and should not trigger replacement.
+    # FIX BUG 3: source_image_reference[0].version is invalid in ignore_changes.
+    # Indexed block paths are not supported — must reference the whole block.
     ignore_changes = [
       admin_password,
-      # Drift guard: Azure platform may update image version automatically.
-      source_image_reference[0].version,
+      source_image_reference,
       tags,
     ]
     # Never destroy a VM before its replacement is ready.
