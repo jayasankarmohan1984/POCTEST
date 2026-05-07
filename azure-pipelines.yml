@@ -1,5 +1,5 @@
 trigger:
-- main
+  - main
 
 pool:
   vmImage: 'ubuntu-latest'
@@ -8,16 +8,23 @@ variables:
   TF_WORKING_DIR: '$(System.DefaultWorkingDirectory)'
 
 stages:
+
+# ─── STAGE 1: Validate ────────────────────────────────────────────
 - stage: Validate
+  displayName: 'Terraform Validate'
   jobs:
   - job: validate
-    displayName: 'Terraform Validate'
+    displayName: 'Validate'
     steps:
+    - checkout: self
+
     - task: TerraformInstaller@0
+      displayName: 'Install Terraform'
       inputs:
         terraformVersion: 'latest'
 
-    - task: TerraformTaskV1@0
+    - task: TerraformTaskV4@0
+      displayName: 'Terraform Init'
       inputs:
         provider: 'azurerm'
         command: 'init'
@@ -29,34 +36,81 @@ stages:
         backendAzureRmKey: 'terraform.tfstate'
         commandOptions: '-upgrade'
 
-    - task: TerraformTaskV1@0
+    - task: TerraformTaskV4@0
+      displayName: 'Terraform Validate'
       inputs:
         provider: 'azurerm'
         command: 'validate'
         workingDirectory: '$(TF_WORKING_DIR)'
 
+# ─── STAGE 2: Plan ────────────────────────────────────────────────
 - stage: Plan
+  displayName: 'Terraform Plan'
+  dependsOn: Validate
   jobs:
   - job: plan
-    displayName: 'Terraform Plan'
+    displayName: 'Plan'
     steps:
-    - task: TerraformTaskV1@0
+    - checkout: self
+
+    - task: TerraformInstaller@0
+      displayName: 'Install Terraform'
+      inputs:
+        terraformVersion: 'latest'
+
+    - task: TerraformTaskV4@0
+      displayName: 'Terraform Init'
+      inputs:
+        provider: 'azurerm'
+        command: 'init'
+        workingDirectory: '$(TF_WORKING_DIR)'
+        backendServiceArm: 'SCN-TFM-HUB'
+        backendAzureRmResourceGroupName: 'rg-tfstate'
+        backendAzureRmStorageAccountName: 'tfstateaccountpoc'
+        backendAzureRmContainerName: 'tfstate'
+        backendAzureRmKey: 'terraform.tfstate'
+
+    - task: TerraformTaskV4@0
+      displayName: 'Terraform Plan'
       inputs:
         provider: 'azurerm'
         command: 'plan'
         workingDirectory: '$(TF_WORKING_DIR)'
         environmentServiceNameAzureRM: 'SCN-TFM-HUB'
 
+# ─── STAGE 3: Apply ───────────────────────────────────────────────
 - stage: Apply
+  displayName: 'Terraform Apply'
+  dependsOn: Plan
   jobs:
   - deployment: apply
-    displayName: 'Terraform Apply'
+    displayName: 'Apply'
     environment: 'hub-default'
     strategy:
       runOnce:
         deploy:
           steps:
-          - task: TerraformTaskV1@0
+          - checkout: self
+
+          - task: TerraformInstaller@0
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: 'latest'
+
+          - task: TerraformTaskV4@0
+            displayName: 'Terraform Init'
+            inputs:
+              provider: 'azurerm'
+              command: 'init'
+              workingDirectory: '$(TF_WORKING_DIR)'
+              backendServiceArm: 'SCN-TFM-HUB'
+              backendAzureRmResourceGroupName: 'rg-tfstate'
+              backendAzureRmStorageAccountName: 'tfstateaccountpoc'
+              backendAzureRmContainerName: 'tfstate'
+              backendAzureRmKey: 'terraform.tfstate'
+
+          - task: TerraformTaskV4@0
+            displayName: 'Terraform Apply'
             inputs:
               provider: 'azurerm'
               command: 'apply'
@@ -64,12 +118,35 @@ stages:
               environmentServiceNameAzureRM: 'SCN-TFM-HUB'
               commandOptions: '-auto-approve'
 
+# ─── STAGE 4: Drift Detection ─────────────────────────────────────
 - stage: Drift
+  displayName: 'Drift Detection'
+  dependsOn: Apply
   jobs:
   - job: drift
-    displayName: 'Terraform Drift Detection'
+    displayName: 'Drift Detection'
     steps:
-    - task: TerraformTaskV1@0
+    - checkout: self
+
+    - task: TerraformInstaller@0
+      displayName: 'Install Terraform'
+      inputs:
+        terraformVersion: 'latest'
+
+    - task: TerraformTaskV4@0
+      displayName: 'Terraform Init'
+      inputs:
+        provider: 'azurerm'
+        command: 'init'
+        workingDirectory: '$(TF_WORKING_DIR)'
+        backendServiceArm: 'SCN-TFM-HUB'
+        backendAzureRmResourceGroupName: 'rg-tfstate'
+        backendAzureRmStorageAccountName: 'tfstateaccountpoc'
+        backendAzureRmContainerName: 'tfstate'
+        backendAzureRmKey: 'terraform.tfstate'
+
+    - task: TerraformTaskV4@0
+      displayName: 'Terraform Plan (Drift)'
       inputs:
         provider: 'azurerm'
         command: 'plan'
