@@ -448,8 +448,7 @@ resource "azurerm_virtual_desktop_host_pool" "avd_host_pool" {
   lifecycle {
     ignore_changes = [
       # Drift guard: registration_info is rotated regularly; ignore in state.
-      registration_info,
-      tags,
+    tags,
     ]
   }
 }
