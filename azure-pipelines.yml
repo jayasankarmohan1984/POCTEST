@@ -23,24 +23,42 @@ stages:
       inputs:
         terraformVersion: 'latest'
 
-    - script: |
-        terraform init \
-          -backend-config="resource_group_name=rg-tfstate" \
-          -backend-config="storage_account_name=tfstateaccountpoc" \
-          -backend-config="container_name=tfstate" \
-          -backend-config="key=terraform.tfstate" \
-          -upgrade
+    - task: AzureCLI@2
       displayName: 'Terraform Init'
-      workingDirectory: '$(TF_WORKING_DIR)'
-      env:
-        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
-        ARM_TENANT_ID: $(ARM_TENANT_ID)
-        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
-        ARM_USE_OIDC: true
+      inputs:
+        azureSubscription: 'SCN-TFM-HUB'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        workingDirectory: '$(TF_WORKING_DIR)'
+        addSpnToEnvironment: true
+        inlineScript: |
+          export ARM_CLIENT_ID=$servicePrincipalId
+          export ARM_TENANT_ID=$tenantId
+          export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+          export ARM_USE_OIDC=true
+          export ARM_OIDC_TOKEN=$idToken
+          terraform init \
+            -backend-config="resource_group_name=rg-tfstate" \
+            -backend-config="storage_account_name=tfstateaccountpoc" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=terraform.tfstate" \
+            -upgrade
 
-    - script: terraform validate
+    - task: AzureCLI@2
       displayName: 'Terraform Validate'
-      workingDirectory: '$(TF_WORKING_DIR)'
+      inputs:
+        azureSubscription: 'SCN-TFM-HUB'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        workingDirectory: '$(TF_WORKING_DIR)'
+        addSpnToEnvironment: true
+        inlineScript: |
+          export ARM_CLIENT_ID=$servicePrincipalId
+          export ARM_TENANT_ID=$tenantId
+          export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+          export ARM_USE_OIDC=true
+          export ARM_OIDC_TOKEN=$idToken
+          terraform validate
 
 # ─── STAGE 2: Plan ────────────────────────────────────────────────
 - stage: Plan
@@ -57,28 +75,41 @@ stages:
       inputs:
         terraformVersion: 'latest'
 
-    - script: |
-        terraform init \
-          -backend-config="resource_group_name=rg-tfstate" \
-          -backend-config="storage_account_name=tfstateaccountpoc" \
-          -backend-config="container_name=tfstate" \
-          -backend-config="key=terraform.tfstate"
+    - task: AzureCLI@2
       displayName: 'Terraform Init'
-      workingDirectory: '$(TF_WORKING_DIR)'
-      env:
-        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
-        ARM_TENANT_ID: $(ARM_TENANT_ID)
-        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
-        ARM_USE_OIDC: true
+      inputs:
+        azureSubscription: 'SCN-TFM-HUB'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        workingDirectory: '$(TF_WORKING_DIR)'
+        addSpnToEnvironment: true
+        inlineScript: |
+          export ARM_CLIENT_ID=$servicePrincipalId
+          export ARM_TENANT_ID=$tenantId
+          export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+          export ARM_USE_OIDC=true
+          export ARM_OIDC_TOKEN=$idToken
+          terraform init \
+            -backend-config="resource_group_name=rg-tfstate" \
+            -backend-config="storage_account_name=tfstateaccountpoc" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=terraform.tfstate"
 
-    - script: terraform plan -out=tfplan
+    - task: AzureCLI@2
       displayName: 'Terraform Plan'
-      workingDirectory: '$(TF_WORKING_DIR)'
-      env:
-        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
-        ARM_TENANT_ID: $(ARM_TENANT_ID)
-        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
-        ARM_USE_OIDC: true
+      inputs:
+        azureSubscription: 'SCN-TFM-HUB'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        workingDirectory: '$(TF_WORKING_DIR)'
+        addSpnToEnvironment: true
+        inlineScript: |
+          export ARM_CLIENT_ID=$servicePrincipalId
+          export ARM_TENANT_ID=$tenantId
+          export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+          export ARM_USE_OIDC=true
+          export ARM_OIDC_TOKEN=$idToken
+          terraform plan -out=tfplan
 
     - task: PublishPipelineArtifact@1
       displayName: 'Publish Plan Artifact'
@@ -112,28 +143,41 @@ stages:
               artifact: 'tfplan'
               path: '$(TF_WORKING_DIR)'
 
-          - script: |
-              terraform init \
-                -backend-config="resource_group_name=rg-tfstate" \
-                -backend-config="storage_account_name=tfstateaccountpoc" \
-                -backend-config="container_name=tfstate" \
-                -backend-config="key=terraform.tfstate"
+          - task: AzureCLI@2
             displayName: 'Terraform Init'
-            workingDirectory: '$(TF_WORKING_DIR)'
-            env:
-              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
-              ARM_TENANT_ID: $(ARM_TENANT_ID)
-              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
-              ARM_USE_OIDC: true
+            inputs:
+              azureSubscription: 'SCN-TFM-HUB'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              workingDirectory: '$(TF_WORKING_DIR)'
+              addSpnToEnvironment: true
+              inlineScript: |
+                export ARM_CLIENT_ID=$servicePrincipalId
+                export ARM_TENANT_ID=$tenantId
+                export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+                export ARM_USE_OIDC=true
+                export ARM_OIDC_TOKEN=$idToken
+                terraform init \
+                  -backend-config="resource_group_name=rg-tfstate" \
+                  -backend-config="storage_account_name=tfstateaccountpoc" \
+                  -backend-config="container_name=tfstate" \
+                  -backend-config="key=terraform.tfstate"
 
-          - script: terraform apply -auto-approve tfplan
+          - task: AzureCLI@2
             displayName: 'Terraform Apply'
-            workingDirectory: '$(TF_WORKING_DIR)'
-            env:
-              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
-              ARM_TENANT_ID: $(ARM_TENANT_ID)
-              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
-              ARM_USE_OIDC: true
+            inputs:
+              azureSubscription: 'SCN-TFM-HUB'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              workingDirectory: '$(TF_WORKING_DIR)'
+              addSpnToEnvironment: true
+              inlineScript: |
+                export ARM_CLIENT_ID=$servicePrincipalId
+                export ARM_TENANT_ID=$tenantId
+                export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+                export ARM_USE_OIDC=true
+                export ARM_OIDC_TOKEN=$idToken
+                terraform apply -auto-approve tfplan
 
 # ─── STAGE 4: Drift Detection ─────────────────────────────────────
 - stage: Drift
@@ -150,36 +194,48 @@ stages:
       inputs:
         terraformVersion: 'latest'
 
-    - script: |
-        terraform init \
-          -backend-config="resource_group_name=rg-tfstate" \
-          -backend-config="storage_account_name=tfstateaccountpoc" \
-          -backend-config="container_name=tfstate" \
-          -backend-config="key=terraform.tfstate"
+    - task: AzureCLI@2
       displayName: 'Terraform Init'
-      workingDirectory: '$(TF_WORKING_DIR)'
-      env:
-        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
-        ARM_TENANT_ID: $(ARM_TENANT_ID)
-        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
-        ARM_USE_OIDC: true
+      inputs:
+        azureSubscription: 'SCN-TFM-HUB'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        workingDirectory: '$(TF_WORKING_DIR)'
+        addSpnToEnvironment: true
+        inlineScript: |
+          export ARM_CLIENT_ID=$servicePrincipalId
+          export ARM_TENANT_ID=$tenantId
+          export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+          export ARM_USE_OIDC=true
+          export ARM_OIDC_TOKEN=$idToken
+          terraform init \
+            -backend-config="resource_group_name=rg-tfstate" \
+            -backend-config="storage_account_name=tfstateaccountpoc" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=terraform.tfstate"
 
-    - script: |
-        terraform plan -detailed-exitcode
-        EXIT_CODE=$?
-        if [ $EXIT_CODE -eq 0 ]; then
-          echo "##[section]✅ No drift detected"
-        elif [ $EXIT_CODE -eq 2 ]; then
-          echo "##[warning]⚠️ Drift detected! Infrastructure has changed."
-          exit 1
-        else
-          echo "##[error]❌ Terraform plan failed"
-          exit 1
-        fi
+    - task: AzureCLI@2
       displayName: 'Terraform Drift Detection'
-      workingDirectory: '$(TF_WORKING_DIR)'
-      env:
-        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
-        ARM_TENANT_ID: $(ARM_TENANT_ID)
-        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
-        ARM_USE_OIDC: true
+      inputs:
+        azureSubscription: 'SCN-TFM-HUB'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        workingDirectory: '$(TF_WORKING_DIR)'
+        addSpnToEnvironment: true
+        inlineScript: |
+          export ARM_CLIENT_ID=$servicePrincipalId
+          export ARM_TENANT_ID=$tenantId
+          export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+          export ARM_USE_OIDC=true
+          export ARM_OIDC_TOKEN=$idToken
+          terraform plan -detailed-exitcode
+          EXIT_CODE=$?
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "##[section]✅ No drift detected"
+          elif [ $EXIT_CODE -eq 2 ]; then
+            echo "##[warning]⚠️ Drift detected! Infrastructure has changed."
+            exit 1
+          else
+            echo "##[error]❌ Terraform plan failed"
+            exit 1
+          fi
