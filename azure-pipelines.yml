@@ -23,25 +23,24 @@ stages:
       inputs:
         terraformVersion: 'latest'
 
-    - task: TerraformTaskV4@0
+    - script: |
+        terraform init \
+          -backend-config="resource_group_name=rg-tfstate" \
+          -backend-config="storage_account_name=tfstateaccountpoc" \
+          -backend-config="container_name=tfstate" \
+          -backend-config="key=terraform.tfstate" \
+          -upgrade
       displayName: 'Terraform Init'
-      inputs:
-        provider: 'azurerm'
-        command: 'init'
-        workingDirectory: '$(TF_WORKING_DIR)'
-        backendServiceArm: 'SCN-TFM-HUB'
-        backendAzureRmResourceGroupName: 'rg-tfstate'
-        backendAzureRmStorageAccountName: 'tfstateaccountpoc'
-        backendAzureRmContainerName: 'tfstate'
-        backendAzureRmKey: 'terraform.tfstate'
-        commandOptions: '-upgrade'
+      workingDirectory: '$(TF_WORKING_DIR)'
+      env:
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+        ARM_USE_OIDC: true
 
-    - task: TerraformTaskV4@0
+    - script: terraform validate
       displayName: 'Terraform Validate'
-      inputs:
-        provider: 'azurerm'
-        command: 'validate'
-        workingDirectory: '$(TF_WORKING_DIR)'
+      workingDirectory: '$(TF_WORKING_DIR)'
 
 # ─── STAGE 2: Plan ────────────────────────────────────────────────
 - stage: Plan
@@ -58,25 +57,35 @@ stages:
       inputs:
         terraformVersion: 'latest'
 
-    - task: TerraformTaskV4@0
+    - script: |
+        terraform init \
+          -backend-config="resource_group_name=rg-tfstate" \
+          -backend-config="storage_account_name=tfstateaccountpoc" \
+          -backend-config="container_name=tfstate" \
+          -backend-config="key=terraform.tfstate"
       displayName: 'Terraform Init'
-      inputs:
-        provider: 'azurerm'
-        command: 'init'
-        workingDirectory: '$(TF_WORKING_DIR)'
-        backendServiceArm: 'SCN-TFM-HUB'
-        backendAzureRmResourceGroupName: 'rg-tfstate'
-        backendAzureRmStorageAccountName: 'tfstateaccountpoc'
-        backendAzureRmContainerName: 'tfstate'
-        backendAzureRmKey: 'terraform.tfstate'
+      workingDirectory: '$(TF_WORKING_DIR)'
+      env:
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+        ARM_USE_OIDC: true
 
-    - task: TerraformTaskV4@0
+    - script: terraform plan -out=tfplan
       displayName: 'Terraform Plan'
+      workingDirectory: '$(TF_WORKING_DIR)'
+      env:
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+        ARM_USE_OIDC: true
+
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Plan Artifact'
       inputs:
-        provider: 'azurerm'
-        command: 'plan'
-        workingDirectory: '$(TF_WORKING_DIR)'
-        environmentServiceNameAzureRM: 'SCN-TFM-HUB'
+        targetPath: '$(TF_WORKING_DIR)/tfplan'
+        artifact: 'tfplan'
+        publishLocation: 'pipeline'
 
 # ─── STAGE 3: Apply ───────────────────────────────────────────────
 - stage: Apply
@@ -97,26 +106,34 @@ stages:
             inputs:
               terraformVersion: 'latest'
 
-          - task: TerraformTaskV4@0
-            displayName: 'Terraform Init'
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download Plan Artifact'
             inputs:
-              provider: 'azurerm'
-              command: 'init'
-              workingDirectory: '$(TF_WORKING_DIR)'
-              backendServiceArm: 'SCN-TFM-HUB'
-              backendAzureRmResourceGroupName: 'rg-tfstate'
-              backendAzureRmStorageAccountName: 'tfstateaccountpoc'
-              backendAzureRmContainerName: 'tfstate'
-              backendAzureRmKey: 'terraform.tfstate'
+              artifact: 'tfplan'
+              path: '$(TF_WORKING_DIR)'
 
-          - task: TerraformTaskV4@0
+          - script: |
+              terraform init \
+                -backend-config="resource_group_name=rg-tfstate" \
+                -backend-config="storage_account_name=tfstateaccountpoc" \
+                -backend-config="container_name=tfstate" \
+                -backend-config="key=terraform.tfstate"
+            displayName: 'Terraform Init'
+            workingDirectory: '$(TF_WORKING_DIR)'
+            env:
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+              ARM_USE_OIDC: true
+
+          - script: terraform apply -auto-approve tfplan
             displayName: 'Terraform Apply'
-            inputs:
-              provider: 'azurerm'
-              command: 'apply'
-              workingDirectory: '$(TF_WORKING_DIR)'
-              environmentServiceNameAzureRM: 'SCN-TFM-HUB'
-              commandOptions: '-auto-approve'
+            workingDirectory: '$(TF_WORKING_DIR)'
+            env:
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+              ARM_USE_OIDC: true
 
 # ─── STAGE 4: Drift Detection ─────────────────────────────────────
 - stage: Drift
@@ -133,23 +150,36 @@ stages:
       inputs:
         terraformVersion: 'latest'
 
-    - task: TerraformTaskV4@0
+    - script: |
+        terraform init \
+          -backend-config="resource_group_name=rg-tfstate" \
+          -backend-config="storage_account_name=tfstateaccountpoc" \
+          -backend-config="container_name=tfstate" \
+          -backend-config="key=terraform.tfstate"
       displayName: 'Terraform Init'
-      inputs:
-        provider: 'azurerm'
-        command: 'init'
-        workingDirectory: '$(TF_WORKING_DIR)'
-        backendServiceArm: 'SCN-TFM-HUB'
-        backendAzureRmResourceGroupName: 'rg-tfstate'
-        backendAzureRmStorageAccountName: 'tfstateaccountpoc'
-        backendAzureRmContainerName: 'tfstate'
-        backendAzureRmKey: 'terraform.tfstate'
+      workingDirectory: '$(TF_WORKING_DIR)'
+      env:
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+        ARM_USE_OIDC: true
 
-    - task: TerraformTaskV4@0
-      displayName: 'Terraform Plan (Drift)'
-      inputs:
-        provider: 'azurerm'
-        command: 'plan'
-        workingDirectory: '$(TF_WORKING_DIR)'
-        environmentServiceNameAzureRM: 'SCN-TFM-HUB'
-        commandOptions: '-detailed-exitcode'
+    - script: |
+        terraform plan -detailed-exitcode
+        EXIT_CODE=$?
+        if [ $EXIT_CODE -eq 0 ]; then
+          echo "##[section]✅ No drift detected"
+        elif [ $EXIT_CODE -eq 2 ]; then
+          echo "##[warning]⚠️ Drift detected! Infrastructure has changed."
+          exit 1
+        else
+          echo "##[error]❌ Terraform plan failed"
+          exit 1
+        fi
+      displayName: 'Terraform Drift Detection'
+      workingDirectory: '$(TF_WORKING_DIR)'
+      env:
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+        ARM_USE_OIDC: true
