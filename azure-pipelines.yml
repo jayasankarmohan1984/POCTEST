@@ -139,7 +139,7 @@ stages:
           export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
           export ARM_USE_OIDC=true
           export ARM_OIDC_TOKEN=$idToken
-          terraform plan -out=tfplan \
+          terraform plan -out=tfplan -lock=false \
             -var-file="terraform.tfvars" \
             -var="win_admin_password=$(WIN_ADMIN_PASSWORD)" \
             -var="s2s_shared_key=$(S2S_SHARED_KEY)"
@@ -289,7 +289,7 @@ stages:
           export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
           export ARM_USE_OIDC=true
           export ARM_OIDC_TOKEN=$idToken
-          terraform plan -detailed-exitcode \
+          terraform plan -detailed-exitcode -lock=false \
             -var-file="terraform.tfvars" \
             -var="win_admin_password=$(WIN_ADMIN_PASSWORD)" \
             -var="s2s_shared_key=$(S2S_SHARED_KEY)"
