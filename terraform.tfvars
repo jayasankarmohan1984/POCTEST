@@ -40,19 +40,23 @@ vnets = {
 }
 
 # ── VPN Gateway ─────────────────────────────────────────────
-vpn_gateway_sku = "VpnGw1"
+# FIX 1: Changed VpnGw1 to VpnGw1AZ — non-AZ SKUs no longer supported
+vpn_gateway_sku = "VpnGw1AZ"
 
 # ── Local Network Gateway (On-Premises) ─────────────────────
 local_network_gateway = {
   name            = "lng-onprem"
   resource_group  = "RG-NET"
-  gateway_address = "1.2.3.4"          # ← Replace with your on-prem public IP
-  address_space   = ["192.168.0.0/16"] # ← Replace with your on-prem CIDR range
+  gateway_address = "1.2.3.4"
+  address_space   = ["192.168.0.0/16"]
 }
 
 # ── Storage Accounts ─────────────────────────────────────────
+# FIX 2: Renamed storage account — tfstateaccountpoc already exists
+# in Azure outside Terraform state so it cannot be created again.
+# Using a new unique name for this Terraform-managed storage account.
 storage_accounts = {
-  "tfstateaccountpoc" = {
+  "hubpocstore2026" = {
     resource_group            = "RG-MGMT"
     account_tier              = "Standard"
     account_replication_type  = "LRS"
@@ -62,8 +66,10 @@ storage_accounts = {
 }
 
 # ── Windows VMs ─────────────────────────────────────────────
-vm_size            = "Standard_B2ms"
-win_admin_username = "adminuser" # ← Replace with your preferred admin username
+# FIX 3: Changed Standard_B2ms to Standard_D2s_v3
+# Standard_B2ms is not available in eastus — using D2s_v3 instead
+vm_size            = "Standard_D2s_v3"
+win_admin_username = "adminuser"
 
 # ── Azure Monitor ────────────────────────────────────────────
 log_analytics_retention_days = 30
