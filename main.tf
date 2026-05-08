@@ -8,8 +8,6 @@
 # Workspace / Environment locals
 ########################
 locals {
-  # Resolve environment from workspace name; override via var if needed.
-  # Workspaces: default → hub, dev, staging, prod
   workspace_env_map = {
     default = "hub"
     dev     = "dev"
@@ -20,15 +18,11 @@ locals {
     local.workspace_env_map, terraform.workspace, terraform.workspace
   )
 
-  # All resources get workspace + environment injected into tags.
   common_tags = merge(var.tags, {
     workspace   = terraform.workspace
     environment = local.environment
   })
 
-  ########################
-  # Networking locals
-  ########################
   hub_vnet = "VN-VPN-FE"
 
   subnet_map = {
@@ -67,10 +61,8 @@ resource "azurerm_resource_group" "rg" {
   tags     = local.common_tags
 
   lifecycle {
-    # Prevent accidental RG deletion — must be explicitly removed from state first.
     prevent_destroy = true
-    # Drift guard: ignore out-of-band tag changes on existing RGs.
-    ignore_changes = [tags] # FIX: map-key indexing in ignore_changes is invalid HCL — must target full attribute
+    ignore_changes  = [tags]
   }
 }
 
@@ -86,12 +78,8 @@ resource "azurerm_virtual_network" "vnet" {
   tags                = local.common_tags
 
   lifecycle {
-    # FIX: Re-creating a VNet destroys all peerings/subnets — always create
-    # replacement before destroying original.
     create_before_destroy = true
-    # Drift guard: address_space changes done outside Terraform are common
-    # during network re-planning; flag them via plan rather than auto-correcting.
-    ignore_changes = [tags]
+    ignore_changes        = [tags]
   }
 }
 
@@ -106,7 +94,6 @@ resource "azurerm_subnet" "subnet_each" {
   address_prefixes     = [each.value.cidr]
 
   lifecycle {
-    # Drift guard: service_endpoints and delegations are often added via portal.
     ignore_changes = [service_endpoints, delegation]
   }
 }
@@ -122,7 +109,6 @@ resource "azurerm_network_security_group" "nsg" {
   tags                = local.common_tags
 
   lifecycle {
-    # Drift guard: security_rule inline blocks are sometimes added in portal.
     ignore_changes = [security_rule, tags]
   }
 }
@@ -167,8 +153,6 @@ resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   allow_gateway_transit        = true
 
   depends_on = [azurerm_virtual_network_gateway.vpn_gw]
-
-  # No lifecycle block needed — all peering attributes should be tracked.
 }
 
 resource "azurerm_virtual_network_peering" "spoke_to_hub" {
@@ -194,17 +178,15 @@ resource "azurerm_public_ip" "vpn_gw_pip" {
   location            = var.location
   allocation_method   = "Static"
   sku                 = "Standard"
+  # FIX: AZ SKU VPN Gateway requires zones on the Public IP
+  zones               = ["1", "2", "3"]
   tags                = local.common_tags
 
   lifecycle {
-    # FIX BUG 4: create_before_destroy=true + prevent_destroy=true together
-    # causes a deadlock — Terraform creates the replacement PIP but then cannot
-    # destroy the original (blocked by prevent_destroy), leaving both orphaned.
-    # Resolution: keep prevent_destroy only. PIP SKU/allocation cannot change
-    # in-place anyway; if it must change, remove prevent_destroy temporarily.
     prevent_destroy = true
-    # Drift guard: Azure may update zones or IP after allocation.
-    ignore_changes = [ip_address, zones]
+    # FIX: Removed ip_address from ignore_changes — it is provider-managed
+    # and cannot be configured so ignore_changes has no effect on it.
+    ignore_changes = [tags]
   }
 }
 
@@ -230,8 +212,7 @@ resource "azurerm_virtual_network_gateway" "vpn_gw" {
 
   lifecycle {
     prevent_destroy = true
-    # Drift guard: bgp_settings are sometimes enabled post-deploy in portal.
-    ignore_changes = [bgp_settings, tags]
+    ignore_changes  = [bgp_settings, tags]
   }
 }
 
@@ -247,7 +228,6 @@ resource "azurerm_local_network_gateway" "lng" {
   tags                = local.common_tags
 
   lifecycle {
-    # On-prem gateway_address can change during failover drills; track in plan.
     ignore_changes = [tags]
   }
 }
@@ -268,8 +248,7 @@ resource "azurerm_virtual_network_gateway_connection" "s2s" {
 
   lifecycle {
     prevent_destroy = true
-    # Drift guard: shared_key rotation done outside Terraform is common.
-    ignore_changes = [shared_key, tags]
+    ignore_changes  = [shared_key, tags]
   }
 }
 
@@ -279,20 +258,15 @@ resource "azurerm_virtual_network_gateway_connection" "s2s" {
 resource "azurerm_storage_account" "sa" {
   for_each = var.storage_accounts
 
-  name                     = each.key
-  resource_group_name      = azurerm_resource_group.rg[each.value.resource_group].name
-  location                 = var.location
-  account_tier             = each.value.account_tier
-  account_replication_type = each.value.account_replication_type
-  account_kind             = each.value.account_kind
-  min_tls_version          = "TLS1_2"
-
-  # FIX: enable_https_traffic_only was declared in variable type but never
-  # wired up in the original. The correct attribute in azurerm 3.x is
-  # https_traffic_only_enabled (renamed from enable_https_traffic_only).
+  name                       = each.key
+  resource_group_name        = azurerm_resource_group.rg[each.value.resource_group].name
+  location                   = var.location
+  account_tier               = each.value.account_tier
+  account_replication_type   = each.value.account_replication_type
+  account_kind               = each.value.account_kind
+  min_tls_version            = "TLS1_2"
   https_traffic_only_enabled = each.value.enable_https_traffic_only
-
-  tags = local.common_tags
+  tags                       = local.common_tags
 
   network_rules {
     default_action             = "Allow"
@@ -301,11 +275,8 @@ resource "azurerm_storage_account" "sa" {
     virtual_network_subnet_ids = []
   }
 
-  # share_properties block removed — not supported on all account_kind values.
-
   lifecycle {
-    # Drift guard: network_rules are frequently tightened via Azure Policy post-deploy.
-    ignore_changes = [network_rules, tags]
+    ignore_changes  = [network_rules, tags]
     prevent_destroy = true
   }
 }
@@ -323,8 +294,7 @@ resource "azurerm_log_analytics_workspace" "law" {
 
   lifecycle {
     prevent_destroy = true
-    # Drift guard: retention is adjusted by Azure Policy / cost management jobs.
-    ignore_changes = [retention_in_days, tags]
+    ignore_changes  = [retention_in_days, tags]
   }
 }
 
@@ -346,8 +316,7 @@ resource "azurerm_network_interface" "nic" {
   tags = local.common_tags
 
   lifecycle {
-    # Drift guard: private IP may be statically set post-deploy.
-    ignore_changes = [ip_configuration, tags] # FIX: indexed block paths not valid in ignore_changes
+    ignore_changes = [tags]
   }
 }
 
@@ -365,7 +334,6 @@ resource "azurerm_windows_virtual_machine" "vm" {
   admin_password        = var.win_admin_password
   network_interface_ids = [azurerm_network_interface.nic[each.key].id]
 
-  # FIX: Windows computer name max 15 chars; original could exceed for long subnet names.
   computer_name = substr(replace("vm-${each.value.subnet_name}", "-", ""), 0, 15)
 
   os_disk {
@@ -383,15 +351,11 @@ resource "azurerm_windows_virtual_machine" "vm" {
   tags = local.common_tags
 
   lifecycle {
-    # Drift guard: admin_password is sensitive and should not trigger replacement.
-    # FIX BUG 3: source_image_reference[0].version is invalid in ignore_changes.
-    # Indexed block paths are not supported — must reference the whole block.
     ignore_changes = [
       admin_password,
       source_image_reference,
       tags,
     ]
-    # Never destroy a VM before its replacement is ready.
     create_before_destroy = false
   }
 }
@@ -406,7 +370,6 @@ resource "azurerm_logic_app_workflow" "la" {
   tags                = local.common_tags
 
   lifecycle {
-    # Drift guard: workflow definition body changes post-deploy via Logic App Designer.
     ignore_changes = [workflow_parameters, parameters, tags]
   }
 }
@@ -446,10 +409,7 @@ resource "azurerm_virtual_desktop_host_pool" "avd_host_pool" {
   tags                     = local.common_tags
 
   lifecycle {
-    ignore_changes = [
-      # Drift guard: registration_info is rotated regularly; ignore in state.
-    tags,
-    ]
+    ignore_changes = [tags]
   }
 }
 
@@ -497,7 +457,6 @@ resource "azurerm_management_lock" "lock_critical" {
   notes      = "Critical Hub resource — __Hub Subscription__ (aab79a42). Managed by Terraform."
 
   lifecycle {
-    # Locks should never be removed automatically.
     prevent_destroy = true
   }
 }
