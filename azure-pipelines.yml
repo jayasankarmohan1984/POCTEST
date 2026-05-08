@@ -6,6 +6,9 @@ pool:
 
 variables:
   TF_WORKING_DIR: '$(System.DefaultWorkingDirectory)'
+  STORAGE_ACCOUNT: 'tfstateaccountpoc'
+  CONTAINER_NAME: 'tfstate'
+  BLOB_NAME: 'terraform.tfstate'
 
 stages:
 
@@ -22,6 +25,20 @@ stages:
       displayName: 'Install Terraform'
       inputs:
         terraformVersion: 'latest'
+
+    - task: AzureCLI@2
+      displayName: 'Break State Lock (if exists)'
+      inputs:
+        azureSubscription: 'SCN-TFM-HUB'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          echo "Checking and breaking state lock if exists..."
+          az storage blob lease break \
+            --account-name $(STORAGE_ACCOUNT) \
+            --container-name $(CONTAINER_NAME) \
+            --blob-name $(BLOB_NAME) \
+            --auth-mode login 2>/dev/null || echo "No lock to break - continuing..."
 
     - task: AzureCLI@2
       displayName: 'Terraform Init'
@@ -41,8 +58,7 @@ stages:
             -backend-config="resource_group_name=rg-tfstate" \
             -backend-config="storage_account_name=tfstateaccountpoc" \
             -backend-config="container_name=tfstate" \
-            -backend-config="key=terraform.tfstate" \
-            -upgrade
+            -backend-config="key=terraform.tfstate"
 
     - task: AzureCLI@2
       displayName: 'Terraform Validate'
@@ -74,6 +90,20 @@ stages:
       displayName: 'Install Terraform'
       inputs:
         terraformVersion: 'latest'
+
+    - task: AzureCLI@2
+      displayName: 'Break State Lock (if exists)'
+      inputs:
+        azureSubscription: 'SCN-TFM-HUB'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          echo "Checking and breaking state lock if exists..."
+          az storage blob lease break \
+            --account-name $(STORAGE_ACCOUNT) \
+            --container-name $(CONTAINER_NAME) \
+            --blob-name $(BLOB_NAME) \
+            --auth-mode login 2>/dev/null || echo "No lock to break - continuing..."
 
     - task: AzureCLI@2
       displayName: 'Terraform Init'
@@ -110,8 +140,9 @@ stages:
           export ARM_USE_OIDC=true
           export ARM_OIDC_TOKEN=$idToken
           terraform plan -out=tfplan \
-            -var='win_admin_password='$(WIN_ADMIN_PASSWORD)'' \
-            -var='s2s_shared_key='$(S2S_SHARED_KEY)''
+            -var-file="terraform.tfvars" \
+            -var="win_admin_password=$(WIN_ADMIN_PASSWORD)" \
+            -var="s2s_shared_key=$(S2S_SHARED_KEY)"
 
     - task: PublishPipelineArtifact@1
       displayName: 'Publish Plan Artifact'
@@ -138,6 +169,20 @@ stages:
             displayName: 'Install Terraform'
             inputs:
               terraformVersion: 'latest'
+
+          - task: AzureCLI@2
+            displayName: 'Break State Lock (if exists)'
+            inputs:
+              azureSubscription: 'SCN-TFM-HUB'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                echo "Checking and breaking state lock if exists..."
+                az storage blob lease break \
+                  --account-name $(STORAGE_ACCOUNT) \
+                  --container-name $(CONTAINER_NAME) \
+                  --blob-name $(BLOB_NAME) \
+                  --auth-mode login 2>/dev/null || echo "No lock to break - continuing..."
 
           - task: DownloadPipelineArtifact@2
             displayName: 'Download Plan Artifact'
@@ -179,10 +224,7 @@ stages:
                 export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
                 export ARM_USE_OIDC=true
                 export ARM_OIDC_TOKEN=$idToken
-                terraform apply -auto-approve \
-                -var='win_admin_password='$(WIN_ADMIN_PASSWORD)'' \
-                -var='s2s_shared_key='$(S2S_SHARED_KEY)'' \
-                tfplan
+                terraform apply -auto-approve tfplan
 
 # ─── STAGE 4: Drift Detection ─────────────────────────────────────
 - stage: Drift
@@ -198,6 +240,20 @@ stages:
       displayName: 'Install Terraform'
       inputs:
         terraformVersion: 'latest'
+
+    - task: AzureCLI@2
+      displayName: 'Break State Lock (if exists)'
+      inputs:
+        azureSubscription: 'SCN-TFM-HUB'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          echo "Checking and breaking state lock if exists..."
+          az storage blob lease break \
+            --account-name $(STORAGE_ACCOUNT) \
+            --container-name $(CONTAINER_NAME) \
+            --blob-name $(BLOB_NAME) \
+            --auth-mode login 2>/dev/null || echo "No lock to break - continuing..."
 
     - task: AzureCLI@2
       displayName: 'Terraform Init'
@@ -233,7 +289,10 @@ stages:
           export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
           export ARM_USE_OIDC=true
           export ARM_OIDC_TOKEN=$idToken
-          terraform plan -detailed-exitcode
+          terraform plan -detailed-exitcode \
+            -var-file="terraform.tfvars" \
+            -var="win_admin_password=$(WIN_ADMIN_PASSWORD)" \
+            -var="s2s_shared_key=$(S2S_SHARED_KEY)"
           EXIT_CODE=$?
           if [ $EXIT_CODE -eq 0 ]; then
             echo "##[section]✅ No drift detected"
